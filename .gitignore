@@ -1,8 +1,8 @@
 *
 !/.gitignore
 !/README.md
-!/.env.example
 !/login.py
 !/run.bat
 !/setup_task.bat
 !/remove_task.bat
+!/config.example.py

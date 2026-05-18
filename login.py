@@ -41,24 +41,21 @@ class Config:
     log_file: str = ''
 
     @classmethod
-    def from_env(cls) -> 'Config':
+    def from_config(cls) -> 'Config':
+        try:
+            import config
+        except ImportError:
+            print('错误：未找到 config.py')
+            print('请复制 config.example.py 为 config.py 并填入真实信息')
+            sys.exit(1)
+
         script_dir = os.path.dirname(os.path.abspath(__file__))
-
-        def _require(key: str) -> str:
-            val = os.environ.get(key, '')
-            if not val:
-                print(f'错误：缺少环境变量 {key}')
-                print('请在系统环境变量或 .env 文件中设置，示例：')
-                print(f'  set {key}=your_value')
-                sys.exit(1)
-            return val
-
         return cls(
-            student_id=_require('STUDENT_ID'),
-            password=_require('PASSWORD'),
-            kqwzxx=_require('KQWZXX'),
-            jdzb=float(_require('JDZB')),
-            wdzb=float(_require('WDZB')),
+            student_id=config.STUDENT_ID,
+            password=config.PASSWORD,
+            kqwzxx=config.KQWZXX,
+            jdzb=float(config.JDZB),
+            wdzb=float(config.WDZB),
             cookie_file=os.path.join(script_dir, 'cookies.json'),
             log_file=os.path.join(script_dir, 'checkin.log'),
         )
@@ -306,7 +303,7 @@ def main(cfg: Config | None = None,
     notify: 通知回调，None 时用默认 Windows 弹窗
     """
     if cfg is None:
-        cfg = Config.from_env()
+        cfg = Config.from_config()
     if notify is None:
         notify = _notify
 
