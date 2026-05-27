@@ -42,7 +42,6 @@ class Config:
 
     @classmethod
     def from_config(cls) -> 'Config':
-        """从 config.py 文件加载配置（本地开发）"""
         try:
             import config
         except ImportError:
@@ -57,26 +56,6 @@ class Config:
             kqwzxx=config.KQWZXX,
             jdzb=float(config.JDZB),
             wdzb=float(config.WDZB),
-            cookie_file=os.path.join(script_dir, 'cookies.json'),
-            log_file=os.path.join(script_dir, 'checkin.log'),
-        )
-
-    @classmethod
-    def from_env(cls) -> 'Config':
-        """从环境变量加载配置（CI/CD 云端）"""
-        def _get(key: str) -> str:
-            val = os.environ.get(key, '')
-            if not val:
-                raise ValueError(f'环境变量 {key} 未设置')
-            return val
-
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        return cls(
-            student_id=_get('STUDENT_ID'),
-            password=_get('PASSWORD'),
-            kqwzxx=_get('KQWZXX'),
-            jdzb=float(_get('JDZB')),
-            wdzb=float(_get('WDZB')),
             cookie_file=os.path.join(script_dir, 'cookies.json'),
             log_file=os.path.join(script_dir, 'checkin.log'),
         )
@@ -170,47 +149,26 @@ def cookies_are_valid(cfg: Config, cookies: list) -> bool:
 # ==================== Browser login ======================
 
 def _create_driver(cfg: Config):
-    """驱动工厂——自动适配 Windows/Linux"""
-    # 1. undetected-chromedriver（反检测，Win/Linux 通用）
+    """驱动工厂——换浏览器驱动只需改这里"""
     try:
         import undetected_chromedriver as uc
         opts = uc.ChromeOptions()
-        opts.add_argument('--headless=new')
+        opts.add_argument('--headless')
         opts.add_argument('--no-sandbox')
         opts.add_argument('--disable-gpu')
         opts.add_argument('--disable-dev-shm-usage')
         log(cfg, '使用 undetected-chromedriver')
         return uc.Chrome(options=opts)
     except Exception as e:
-        log(cfg, f'undetected-chromedriver 不可用({e})')
-
-    # 2. Selenium Chrome（Linux CI/CD）
-    try:
+        log(cfg, f'undetected-chromedriver 不可用({e})，回退 Edge')
         from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options as ChromeOptions
-        from selenium.webdriver.chrome.service import Service as ChromeService
-        opts = ChromeOptions()
-        opts.add_argument('--headless=new')
+        from selenium.webdriver.edge.options import Options as EdgeOptions
+        opts = EdgeOptions()
+        opts.add_argument('--headless')
         opts.add_argument('--no-sandbox')
         opts.add_argument('--disable-gpu')
         opts.add_argument('--disable-dev-shm-usage')
-        opts.binary_location = '/usr/bin/google-chrome'
-        svc = ChromeService('/usr/bin/chromedriver')
-        log(cfg, '使用 Selenium Chrome (Linux)')
-        return webdriver.Chrome(service=svc, options=opts)
-    except Exception as e:
-        log(cfg, f'Chrome 不可用({e})')
-
-    # 3. Selenium Edge（Windows 回退）
-    from selenium import webdriver
-    from selenium.webdriver.edge.options import Options as EdgeOptions
-    opts = EdgeOptions()
-    opts.add_argument('--headless')
-    opts.add_argument('--no-sandbox')
-    opts.add_argument('--disable-gpu')
-    opts.add_argument('--disable-dev-shm-usage')
-    log(cfg, '使用 Selenium Edge (Windows)')
-    return webdriver.Edge(options=opts)
+        return webdriver.Edge(options=opts)
 
 
 def login_via_browser(cfg: Config) -> list:
@@ -345,10 +303,7 @@ def main(cfg: Config | None = None,
     notify: 通知回调，None 时用默认 Windows 弹窗
     """
     if cfg is None:
-        try:
-            cfg = Config.from_config()
-        except SystemExit:
-            cfg = Config.from_env()
+        cfg = Config.from_config()
     if notify is None:
         notify = _notify
 
