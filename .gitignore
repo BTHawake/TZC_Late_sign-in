@@ -1,0 +1,9 @@
+*
+!/.gitignore
+!/README.md
+!/login.py
+!/run.bat
+!/setup_task.bat
+!/remove_task.bat
+!/config.example.py
+!/gitee-go.sh
