@@ -1,13 +1,8 @@
 @echo off
-:: 注册定时任务前请确认 config.py 已配置正确
+chcp 65001 >nul
 cd /d "%~dp0"
 
-schtasks /create /tn TZC_auto_checkin ^
-    /tr "cmd /c \"cd /d %CD% && python login.py\"" ^
-    /sc daily /st 21:30 /it /f
-
-echo 任务已创建: TZC_auto_checkin
-echo 每天 21:30 自动运行
-echo.
-echo 检查: taskschd.msc
+set CMD=cmd /c cd /d %CD% ^&^& python login.py
+schtasks /create /tn TZC_auto_checkin /tr "%CMD%" /sc daily /st 21:30 /it /f
+if %errorlevel%==0 (echo Task created: TZC_auto_checkin) else (echo FAILED - run as Administrator!)
 pause
