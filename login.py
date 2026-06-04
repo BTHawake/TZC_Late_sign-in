@@ -2,7 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 台州学院学工系统 - 自动查寝签到脚本
-Cookie 复用 + 无头浏览器登录回退
+用法: python login.py              → 执行签到
+      python login.py --setup      → 注册定时任务（需要管理员）
+      python login.py --remove     → 移除定时任务（需要管理员）
+
+打包后: tzc_checkin.exe / tzc_checkin.exe --setup / tzc_checkin.exe --remove
 """
 
 import json
@@ -10,7 +14,7 @@ import os
 import random
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
@@ -22,17 +26,18 @@ from selenium.webdriver.support import expected_conditions as EC
 
 urllib3.disable_warnings()
 
+TASK_NAME = 'TZC_auto_checkin'
+
 
 # ======================== Config ========================
 
 @dataclass
 class Config:
-    """所有配置聚合一处。模块不再散落全局变量。"""
     student_id: str = ''
     password: str = ''
-    kqwzxx: str = ''          # 签到位置
-    jdzb: float = 0.0         # 经度
-    wdzb: float = 0.0         # 纬度
+    kqwzxx: str = ''
+    jdzb: float = 0.0
+    wdzb: float = 0.0
     base_url: str = 'https://xgfw.tzc.edu.cn/xsfw/sys/swmzncqapp/*default/index.do'
     sso_url: str = 'https://sso.tzc.edu.cn'
     info_url: str = 'https://xgfw.tzc.edu.cn/xsfw/sys/swmzncqapp/kqController/getKqInfo.do'
@@ -41,24 +46,98 @@ class Config:
     log_file: str = ''
 
     @classmethod
-    def from_config(cls) -> 'Config':
-        try:
-            import config
-        except ImportError:
-            print('错误：未找到 config.py')
-            print('请复制 config.example.py 为 config.py 并填入真实信息')
+    def from_file(cls) -> 'Config':
+        app_dir = _app_dir()
+        config_path = os.path.join(app_dir, 'config.txt')
+        if not os.path.exists(config_path):
+            print(f'错误：未找到 {config_path}')
+            print('请复制 config.example.txt 为 config.txt 并填入真实信息')
             sys.exit(1)
 
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        cfg = {}
+        with open(config_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' in line:
+                    key, val = line.split('=', 1)
+                    cfg[key.strip()] = val.strip()
+
         return cls(
-            student_id=config.STUDENT_ID,
-            password=config.PASSWORD,
-            kqwzxx=config.KQWZXX,
-            jdzb=float(config.JDZB),
-            wdzb=float(config.WDZB),
-            cookie_file=os.path.join(script_dir, 'cookies.json'),
-            log_file=os.path.join(script_dir, 'checkin.log'),
+            student_id=cfg.get('STUDENT_ID', ''),
+            password=cfg.get('PASSWORD', ''),
+            kqwzxx=cfg.get('KQWZXX', ''),
+            jdzb=float(cfg.get('JDZB', 0)),
+            wdzb=float(cfg.get('WDZB', 0)),
+            cookie_file=os.path.join(app_dir, 'cookies.json'),
+            log_file=os.path.join(app_dir, 'checkin.log'),
         )
+# ========================================================
+
+
+# ====================== App Dir ==========================
+
+def _app_dir() -> str:
+    """获取 .exe 或脚本所在目录（打包后和开发环境都正确）"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+# ========================================================
+
+
+# ======================== Admin ==========================
+
+def _is_admin():
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
+
+
+def _elevate():
+    """提权重启当前进程（UAC 弹窗确认）"""
+    import ctypes
+    exe = sys.executable
+    args = ' '.join(sys.argv)
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, args, None, 1)
+    sys.exit(0)
+
+
+def _exe_path():
+    """定时任务中要执行的命令"""
+    app_dir = _app_dir()
+    if getattr(sys, 'frozen', False):
+        return f'cmd /c cd /d {app_dir} && {sys.executable}'
+    else:
+        return f'cmd /c cd /d {app_dir} && python login.py'
+# ========================================================
+
+
+# ==================== Task Manager =======================
+
+def setup_task():
+    """注册 Windows 定时任务（需要管理员）"""
+    if not _is_admin():
+        _elevate()
+    import subprocess
+    cmd = (
+        f'schtasks /create /tn {TASK_NAME} '
+        f'/tr "{_exe_path()}" '
+        f'/sc daily /st 21:30 /it /f'
+    )
+    subprocess.run(cmd, shell=True)
+    print(f'Task created: {TASK_NAME} (daily 21:30)')
+
+
+def remove_task():
+    """移除 Windows 定时任务（需要管理员）"""
+    if not _is_admin():
+        _elevate()
+    import subprocess
+    subprocess.run(f'schtasks /delete /tn {TASK_NAME} /f', shell=True)
+    print(f'Task removed: {TASK_NAME}')
 # ========================================================
 
 
@@ -76,18 +155,11 @@ def log(cfg: Config, msg: str) -> None:
 # ==================== API predicates =====================
 
 def is_api_success(r: dict) -> bool:
-    """统一成功判定：code='0' 或 status=True"""
     return r.get('code') == '0' or r.get('status') is True
 
 
 def is_sw_exception(r: dict) -> bool:
     return 'SwException' in str(r)
-
-
-def is_auth_failure(r: dict) -> bool:
-    """401 页面 = 认证已失效"""
-    raw = r.get('raw', '')
-    return isinstance(raw, str) and '401' in raw
 
 
 def parse_response(resp: requests.Response) -> dict:
@@ -149,45 +221,28 @@ def cookies_are_valid(cfg: Config, cookies: list) -> bool:
 # ==================== Browser login ======================
 
 def _create_driver(cfg: Config):
-    """驱动工厂——换浏览器驱动只需改这里"""
-    try:
-        import undetected_chromedriver as uc
-        opts = uc.ChromeOptions()
-        opts.add_argument('--headless')
-        opts.add_argument('--no-sandbox')
-        opts.add_argument('--disable-gpu')
-        opts.add_argument('--disable-dev-shm-usage')
-        log(cfg, '使用 undetected-chromedriver')
-        return uc.Chrome(options=opts)
-    except Exception as e:
-        log(cfg, f'undetected-chromedriver 不可用({e})，回退 Edge')
-        from selenium import webdriver
-        from selenium.webdriver.edge.options import Options as EdgeOptions
-        opts = EdgeOptions()
-        opts.add_argument('--headless')
-        opts.add_argument('--no-sandbox')
-        opts.add_argument('--disable-gpu')
-        opts.add_argument('--disable-dev-shm-usage')
-        return webdriver.Edge(options=opts)
+    from selenium import webdriver
+    from selenium.webdriver.edge.options import Options as EdgeOptions
+    opts = EdgeOptions()
+    opts.add_argument('--headless')
+    opts.add_argument('--no-sandbox')
+    opts.add_argument('--disable-gpu')
+    opts.add_argument('--disable-dev-shm-usage')
+    log(cfg, '使用 Selenium Edge')
+    return webdriver.Edge(options=opts)
 
 
-def login_via_browser(cfg: Config) -> list:
+def _login_headless(cfg: Config) -> list:
+    """无头模式自动登录"""
     log(cfg, '启动无头浏览器登录 SSO...')
-
     driver = _create_driver(cfg)
     try:
         driver.get(f'{cfg.sso_url}/login?service={cfg.base_url}')
         log(cfg, f'已打开 SSO 登录页 ({driver.current_url[:100]})')
 
         wait = WebDriverWait(driver, 15)
-        try:
-            wait.until(EC.presence_of_element_located((By.NAME, 'username')))
-        except Exception:
-            log(cfg, f'未找到 username 输入框，URL: {driver.current_url[:100]}')
-            log(cfg, f'页面片段: {driver.page_source[:600]}')
-            raise
+        wait.until(EC.presence_of_element_located((By.NAME, 'username')))
 
-        # 逐字键入，模拟真人
         uname = driver.find_element(By.NAME, 'username')
         for ch in cfg.student_id:
             uname.send_keys(ch)
@@ -200,8 +255,41 @@ def login_via_browser(cfg: Config) -> list:
 
         log(cfg, '已填入账号密码')
         driver.find_element(By.XPATH, '//button[@type="submit"]').click()
-        log(cfg, '已提交登录，等待跳转到学工系统...')
+        log(cfg, '已提交登录...')
 
+        # 等待下一步：短信验证 或 直接跳转
+        time.sleep(3)
+
+        # 检查是否是短信验证页面
+        sms_input = None
+        try:
+            sms_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//input[@placeholder='请输入验证码']"))
+            )
+        except Exception:
+            pass
+
+        if sms_input:
+            log(cfg, '检测到短信验证页面！')
+            try:
+                btn = driver.find_element(By.XPATH, "//a[contains(text(),'获取验证码')]")
+                btn.click()
+                log(cfg, '已点击"获取验证码"，验证码已发送至手机')
+            except Exception:
+                pass
+
+            code = input('请输入短信验证码: ').strip()
+            sms_input.send_keys(code)
+            log(cfg, '已填入验证码')
+
+            try:
+                driver.find_element(By.XPATH, "//button[@type='submit']").click()
+                log(cfg, '已提交验证')
+            except Exception:
+                sms_input.send_keys('\n')
+
+        # 等待跳转到学工系统
+        log(cfg, '等待跳转到学工系统...')
         for i in range(30):
             time.sleep(1)
             if 'xgfw.tzc.edu.cn' in driver.current_url:
@@ -209,25 +297,70 @@ def login_via_browser(cfg: Config) -> list:
                 time.sleep(3)
                 break
         else:
-            log(cfg, f'警告：30s 内未跳转，URL: {driver.current_url[:100]}')
+            log(cfg, f'无头模式未跳转，URL: {driver.current_url[:100]}')
 
-        cookies = driver.get_cookies()
-        log(cfg, f'登录完成，获得 {len(cookies)} 个 Cookie')
-        return cookies
+        return driver.get_cookies()
     finally:
         driver.quit()
+
+
+def _login_manual(cfg: Config) -> list:
+    """打开可见浏览器，用户手动完成登录（含人机验证、短信）"""
+    log(cfg, '========== 打开可见浏览器 ==========')
+    log(cfg, '请在浏览器中手动完成登录（包括人机验证、短信验证码）')
+    log(cfg, '登录成功后脚本会自动检测并继续...')
+
+    from selenium import webdriver as wd
+    driver = wd.Edge()
+    try:
+        driver.get(f'{cfg.sso_url}/login?service={cfg.base_url}')
+
+        # 等待用户手动登录完成
+        for i in range(300):  # 最多等 5 分钟
+            time.sleep(1)
+            url = driver.current_url
+            if 'xgfw.tzc.edu.cn' not in url:
+                continue
+
+            # 额外等 5 秒让页面 JavaScript 完成初始化
+            time.sleep(5)
+            cookies = driver.get_cookies()
+
+            # 确认不是 401 错误页
+            if len(cookies) >= 2:
+                body = driver.find_element(By.TAG_NAME, 'body').text
+                if 'Not login' not in body and '401' not in body:
+                    log(cfg, f'已登录学工系统 ({len(cookies)} Cookie)')
+                    return cookies
+
+            log(cfg, f'xgfw 已加载但未真登录 ({len(cookies)} Cookie)，继续等...')
+
+        log(cfg, '超时：5 分钟内未完成登录')
+        return []
+    finally:
+        driver.quit()
+
+
+def login_via_browser(cfg: Config) -> list:
+    # 先试无头
+    cookies = _login_headless(cfg)
+    if len(cookies) >= 2:
+        log(cfg, f'自动登录成功 ({len(cookies)} 个 Cookie)')
+        return cookies
+
+    # 失败 → 手动
+    log(cfg, '自动登录未获取足够 Cookie，切换手动模式...')
+    return _login_manual(cfg)
 # ========================================================
 
 
 # ==================== Check-in pipeline ==================
 
 def random_offset(val: float) -> float:
-    """坐标 ±0.0002° 随机漂移（约 10-20 米）"""
     return val + random.uniform(-0.000200, 0.000200)
 
 
 def build_payload(cfg: Config) -> dict:
-    """组装签到请求体——数据组装与 HTTP 无关"""
     return {
         'KQWZXX': cfg.kqwzxx,
         'JDZB': random_offset(cfg.jdzb),
@@ -236,7 +369,6 @@ def build_payload(cfg: Config) -> dict:
 
 
 def _try_sign_json(cfg: Config, cookies: dict, payload: dict) -> dict:
-    """单次 JSON 格式签到尝试"""
     headers = build_headers(cfg)
     headers['Content-Type'] = 'application/json; charset=UTF-8'
     resp = requests.post(cfg.sign_url, json=payload, headers=headers,
@@ -245,7 +377,6 @@ def _try_sign_json(cfg: Config, cookies: dict, payload: dict) -> dict:
 
 
 def _try_sign_form(cfg: Config, cookies: dict, payload: dict) -> dict:
-    """单次表单格式签到尝试"""
     headers = build_headers(cfg)
     form_data = {k: str(v) for k, v in payload.items()}
     resp = requests.post(cfg.sign_url, data=form_data, headers=headers,
@@ -254,7 +385,6 @@ def _try_sign_form(cfg: Config, cookies: dict, payload: dict) -> dict:
 
 
 def do_checkin(cfg: Config, cookies: list) -> bool:
-    """执行签到：JSON 优先，SwException 回退表单"""
     cookie_dict = {c['name']: c['value'] for c in cookies}
     payload = build_payload(cfg)
     jdz, wdz = payload['JDZB'], payload['WDZB']
@@ -284,7 +414,6 @@ def do_checkin(cfg: Config, cookies: list) -> bool:
 # ==================== Notification =======================
 
 def _notify(title: str, msg: str, icon: int) -> None:
-    """Windows 弹窗。无桌面会话时静默。"""
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(0, msg, title, icon)
@@ -297,13 +426,18 @@ def _notify(title: str, msg: str, icon: int) -> None:
 
 def main(cfg: Config | None = None,
          notify: Callable[[str, str, int], None] | None = None) -> bool:
-    """
-    签到主流程。返回 bool 而非 sys.exit，测试友好。
-    cfg: 配置实例，None 时从环境变量加载
-    notify: 通知回调，None 时用默认 Windows 弹窗
-    """
+
+    # CLI 控制命令
+    if '--setup' in sys.argv:
+        setup_task()
+        return True
+    if '--remove' in sys.argv:
+        remove_task()
+        return True
+
+    # 签到流程
     if cfg is None:
-        cfg = Config.from_config()
+        cfg = Config.from_file()
     if notify is None:
         notify = _notify
 

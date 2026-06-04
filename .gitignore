@@ -2,7 +2,8 @@
 !/.gitignore
 !/README.md
 !/login.py
+!/config.example.txt
+!/pack.bat
 !/run.bat
 !/setup_task.bat
 !/remove_task.bat
-!/config.example.py

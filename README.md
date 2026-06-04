@@ -47,7 +47,7 @@ pip install undetected-chromedriver
 ### 2. 配置账号信息
 
 ```bash
-copy config.example.py config.py
+copy config.example.py config.txt
 ```
 
 用记事本打开 `config.py`，把示例值改成你的真实信息：
